@@ -5,6 +5,7 @@ import { DiagnosticProvider } from './DiagnosticsProvider';
 import { CueVetDiagnosticsProvider } from './CueVetDiagnosticsProvider';
 import { VelaVetDiagnosticsProvider } from './VelaVetDiagnosticsProvider';
 import { VelaYamlSchemaProvider } from './VelaYamlSchemaProvider';
+import { checkTools } from './ToolManager';
 
 let disposables: Disposable[] = [];
 
@@ -41,6 +42,8 @@ const diagnosticProviders: DiagnosticProvider[] = [
 ];
 
 export async function activate(context: ExtensionContext) {
+  checkTools();
+
   const yamlSchemaProvider = new VelaYamlSchemaProvider(context.globalStorageUri.fsPath);
   await yamlSchemaProvider.register();
 

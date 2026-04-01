@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { DiagnosticProvider } from './DiagnosticsProvider';
 import { spawn } from 'child_process';
+import { getToolPath } from './ToolManager';
 
 export class VelaVetDiagnosticsProvider implements DiagnosticProvider {
     private collection: vscode.DiagnosticCollection
@@ -30,7 +31,7 @@ export class VelaVetDiagnosticsProvider implements DiagnosticProvider {
     }
 
     runCommand(document: vscode.TextDocument): Promise<string> {
-        const command = `vela def vet ${document.fileName}`;
+        const command = `${getToolPath('vela')} def vet ${document.fileName}`;
 
         const process = spawn(command, { shell: true });
 

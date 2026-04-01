@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { DiagnosticProvider } from './DiagnosticsProvider';
 import { spawn } from 'child_process';
+import { getToolPath } from './ToolManager';
 import { writeFileSync, rmSync, mkdtempSync } from 'fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -77,7 +78,7 @@ export class CueVetDiagnosticsProvider implements DiagnosticProvider {
 
         writeFileSync(`${this.tempDirectory}/${fileName}`, tempFileContent);
 
-        const command = `cue vet ${this.tempDirectory}/${fileName}`;
+        const command = `${getToolPath('cue')} vet ${this.tempDirectory}/${fileName}`;
 
         const process = spawn(command, { shell: true });
 
