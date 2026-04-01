@@ -10,7 +10,7 @@ import { randomBytes } from 'crypto';
 export class CueVetDiagnosticsProvider implements DiagnosticProvider {
     private collection: vscode.DiagnosticCollection
 
-    private mockContext = `#Context: {
+    private mockContext = `#Context: close({
         appRevision:    string
         appRevisionNum: int
         appName:        string
@@ -18,7 +18,7 @@ export class CueVetDiagnosticsProvider implements DiagnosticProvider {
         namespace:      string
         output:         _
         outputs:        _
-    }
+    })
     context: #Context`;
 
     private tempDirectory: string | undefined;
@@ -122,6 +122,7 @@ export class CueVetDiagnosticsProvider implements DiagnosticProvider {
         // "vtx-static-site".attributes.status.details.buildUrl: reference "parameter" not found:
         //     ./var/folders/1r/ftxlxmpx6g3dv3gng89htxdh0000gn/T/vela-vscode-extension-VZwSMs/e95cc7df99ba39b2f9ce74f365bf33ee.cue:10:59
         return problem
+            .replace(/\n$/, '') // replace trailing newline
             .split('\n')
             .reduce<[string, string][]>((result, value, index) => {
                 if (index % 2 == 0) {
