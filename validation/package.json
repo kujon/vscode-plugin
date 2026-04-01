@@ -9,12 +9,10 @@
   "engines": {
     "vscode": "^1.73.0"
   },
-  "categories": [
-    "Other"
-  ],
   "activationEvents": [
     "onLanguage:yaml",
-    "onLanguage:manifest-yaml"
+    "onLanguage:manifest-yaml",
+    "onLanguage:cue"
   ],
   "main": "./out/extension",
   "contributes": {
@@ -26,6 +24,24 @@
           "default": true,
           "description": "Exclude +ignore fields.",
           "order": 0
+        },
+        "velaValidation.tools.kubectlPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the kubectl binary. Leave empty to use the one on your PATH.",
+          "order": 1
+        },
+        "velaValidation.tools.cuePath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the cue binary. Leave empty to use the one on your PATH.",
+          "order": 2
+        },
+        "velaValidation.tools.velaPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the vela binary. Leave empty to use the one on your PATH.",
+          "order": 3
         }
       }
     }

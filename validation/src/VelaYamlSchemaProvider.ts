@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { exec, execSync } from 'child_process';
 import { promisify } from 'util';
+import { getToolPath } from './ToolManager';
 
 const execAsync = promisify(exec);
 
@@ -11,7 +12,7 @@ const CACHE_FILENAME = 'vela-application-schema.json';
 
 function getK8sContext(): string {
     try {
-        return execSync('kubectl config current-context', { encoding: 'utf-8', timeout: 5_000 }).trim();
+        return execSync(`${getToolPath('kubectl')} config current-context`, { encoding: 'utf-8', timeout: 5_000 }).trim();
     } catch {
         return 'unknown';
     }
@@ -64,11 +65,11 @@ function isVelaApplication(content: string): boolean {
 const KUBECTL_OPTS = { timeout: 10_000, maxBuffer: 10 * 1024 * 1024 };
 
 function kubectlSync(args: string): string {
-    return execSync(`kubectl ${args}`, { encoding: 'utf-8', ...KUBECTL_OPTS });
+    return execSync(`${getToolPath('kubectl')} ${args}`, { encoding: 'utf-8', ...KUBECTL_OPTS });
 }
 
 async function kubectlAsync(args: string): Promise<string> {
-    const { stdout } = await execAsync(`kubectl ${args}`, KUBECTL_OPTS);
+    const { stdout } = await execAsync(`${getToolPath('kubectl')} ${args}`, KUBECTL_OPTS);
     return stdout;
 }
 
