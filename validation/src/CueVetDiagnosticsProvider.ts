@@ -100,6 +100,7 @@ export class CueVetDiagnosticsProvider implements DiagnosticProvider {
                 const addonDir = dirname(document.fileName);
                 const parameterFilePath = join(addonDir, 'parameter.cue');
                 const parameterContent = readFileSync(parameterFilePath, 'utf-8')
+                    .replace(/package .+\n/, '')
                     .replace(/parameter:/, '#Parameter:');
 
                 const resourcesDir = join(addonDir, 'resources');
@@ -119,6 +120,7 @@ export class CueVetDiagnosticsProvider implements DiagnosticProvider {
                 const addonDir = dirname(resourceDir);
                 const parameterFilePath = join(addonDir, 'parameter.cue');
                 const parameterContent = readFileSync(parameterFilePath, 'utf-8')
+                    .replace(/package .+\n/, '')
                     .replace(/parameter:/, '#Parameter:');
                 return `
                     ${parameterContent}
