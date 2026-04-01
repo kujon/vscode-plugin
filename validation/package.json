@@ -11,7 +11,8 @@
   },
   "activationEvents": [
     "onLanguage:yaml",
-    "onLanguage:manifest-yaml"
+    "onLanguage:manifest-yaml",
+    "onLanguage:cue"
   ],
   "main": "./out/extension",
   "contributes": {
