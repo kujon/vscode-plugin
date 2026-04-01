@@ -1,5 +1,11 @@
 import * as vscode from 'vscode';
 
+export type CoreProblem = {
+    message: string,
+    range: vscode.Range,
+    severity: vscode.DiagnosticSeverity
+}
+
 export interface DiagnosticProvider {
     getName(): string
 
@@ -9,9 +15,7 @@ export interface DiagnosticProvider {
 
     runCommand(document: vscode.TextDocument): Promise<string>
 
-    findRange(document: vscode.TextDocument, problem: string): vscode.Range
-
-    findCoreProblem(problem: string): string
+    findCoreProblems(document: vscode.TextDocument, problem: string): CoreProblem[]
 
     activate(): void
 

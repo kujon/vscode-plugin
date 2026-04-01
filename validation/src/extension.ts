@@ -18,18 +18,20 @@ async function updateDiagnostics(document: vscode.TextDocument, diagnosticProvid
     } catch (problem) {
       console.debug(problem);
 
-      const coreProblem = diagnosticProvider.findCoreProblem(problem as string);
-      const range = diagnosticProvider.findRange(document, problem as string);
+      const problems = diagnosticProvider.findCoreProblems(document, problem as string);
 
-      diagnosticProvider.getCollection().set(document.uri, [{
-        message: coreProblem,
-        range,
-        severity: vscode.DiagnosticSeverity.Error,
-        source: diagnosticProvider.getName(),
-        relatedInformation: [
-          new vscode.DiagnosticRelatedInformation(new vscode.Location(document.uri, range), coreProblem)
-        ]
-      }]);
+      diagnosticProvider.getCollection().set(
+        document.uri,
+        problems.map(problem => ({
+          message: problem.message,
+          range: problem.range,
+          severity: problem.severity,
+          source: diagnosticProvider.getName(),
+          relatedInformation: [
+            new vscode.DiagnosticRelatedInformation(new vscode.Location(document.uri, problem.range), problem.message)
+          ]
+        }))
+      );
     }
   } else {
     diagnosticProvider.getCollection().clear();

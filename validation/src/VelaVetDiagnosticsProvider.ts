@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { DiagnosticProvider } from './DiagnosticsProvider';
+import { CoreProblem, DiagnosticProvider } from './DiagnosticsProvider';
 import { spawn } from 'child_process';
 import { getToolPath } from './ToolManager';
 
@@ -46,17 +46,21 @@ export class VelaVetDiagnosticsProvider implements DiagnosticProvider {
         });
     }
 
-    findRange(document: vscode.TextDocument, problem: string): vscode.Range {
+    private findRange(document: vscode.TextDocument, problem: string): vscode.Range {
         const regexes = [
-            // Error: failed to parse CUE: /Users/kuba/personal_repos/vscode-plugin/validation/examples/dummy.cue: invalid type trit
+            // invalid type trit
             /invalid type (.+)/,
-            // Error: failed to parse CUE: /Users/kuba/personal_repos/vscode-plugin/validation/examples/dummy.cue: invalid definition spec: json: cannot unmarshal number into Go struct field TraitDefinitionSpec.podDisruptive of type bool
-            // Error: failed to parse CUE: /Users/kuba/personal_repos/vscode-plugin/validation/examples/dummy.cue: invalid definition spec: json: cannot unmarshal number into Go struct field WorkloadTypeDescriptor.workload.type of type string
+            // invalid definition spec: json: cannot unmarshal number into Go struct field TraitDefinitionSpec.podDisruptive of type bool
+            // invalid definition spec: json: cannot unmarshal number into Go struct field WorkloadTypeDescriptor.workload.type of type string
             /field [\w\.]+\.+(\w+) of type/,
-            // Error: failed to parse CUE: /Users/kuba/personal_repos/vscode-plugin/validation/examples/dummy.cue: test2.attributes.podDisruptive: reference "tru" not found
+            // test2.attributes.podDisruptive: reference "tru" not found
             /reference \"(.+)\" not found/,
-            // Error: failed to parse CUE: /Users/kuba/personal_repos/vscode-plugin/validation/examples/dummy.cue: invalid definition spec: json: unknown field "podDisruptive"
-            /unknown field "(.+)"/
+            // invalid definition spec: json: unknown field "podDisruptive"
+            /unknown field "(.+)"/,
+            // duplicated definition name found, vtx-static-site and podDisruptive
+            /duplicated definition name found, .+ and (.+)/,
+            // lol: cannot use value 42 (type int) as struct
+            /(.+)\: cannot use value .+ \(type .+\) as .+/
         ];
 
         let keyword: string | undefined;
@@ -81,10 +85,15 @@ export class VelaVetDiagnosticsProvider implements DiagnosticProvider {
         );
     }
 
-    findCoreProblem(problem: string): string {
-        // Error: failed to parse CUE: /Users/kuba/personal_repos/vscode-plugin/validation/examples/dummy.cue: invalid definition spec: json: unknown field "podDisruptive"
+    findCoreProblems(document: vscode.TextDocument, problem: string): CoreProblem[] {
+        // invalid definition spec: json: unknown field "podDisruptive"
         // into
         // invalid definition spec: json: unknown field "podDisruptive"
-        return problem.replace(/Error\: failed to parse CUE\:\s.+\.\w+\:\s/, '');
+        const coreProblem = problem.replace(/Error\: failed to parse CUE\:\s.+\.\w+\:\s/, '');
+        return [{
+            message: coreProblem,
+            range: this.findRange(document, coreProblem),
+            severity: vscode.DiagnosticSeverity.Error
+        }];
     }
 }

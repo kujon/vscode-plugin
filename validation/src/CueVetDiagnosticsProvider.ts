@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { DiagnosticProvider } from './DiagnosticsProvider';
+import { CoreProblem, DiagnosticProvider } from './DiagnosticsProvider';
 import { spawn } from 'child_process';
 import { getToolPath } from './ToolManager';
 import { writeFileSync, rmSync, mkdtempSync } from 'fs';
@@ -98,9 +98,8 @@ export class CueVetDiagnosticsProvider implements DiagnosticProvider {
         });
     }
 
-    findRange(document: vscode.TextDocument, problem: string): vscode.Range {
-        // template.parameter.foo: reference "boo" not found:
-        // ./Users/kuba/personal_repos/vscode-plugin/validation/examples/dummy.cue:32:8
+    private findRange(document: vscode.TextDocument, problem: string): vscode.Range {
+        // ./var/folders/1r/ftxlxmpx6g3dv3gng89htxdh0000gn/T/vela-vscode-extension-VZwSMs/e95cc7df99ba39b2f9ce74f365bf33ee.cue:10:21
         const lineAndColumn = problem.match(/(.+)\:(\d+)\:(\d+)\n?$/)?.slice(2).map(val => parseInt(val, 10) - 1);
 
         if (lineAndColumn?.length == 2) {
@@ -115,11 +114,29 @@ export class CueVetDiagnosticsProvider implements DiagnosticProvider {
         }
     }
 
-    findCoreProblem(problem: string): string {
-        // template.parameter.foo: reference "boo" not found:
-        // ./Users/kuba/personal_repos/vscode-plugin/validation/examples/dummy.cue:32:8
-        // into
-        // template.parameter.foo: reference "boo" not found
-        return problem.replace(/\:\n(.+)/, '');
+    findCoreProblems(document: vscode.TextDocument, problem: string): CoreProblem[] {
+        // Sample error:
+        // 
+        // "vtx-static-site".attributes.status.details.buildUrl: reference "parameter" not found:
+        //     ./var/folders/1r/ftxlxmpx6g3dv3gng89htxdh0000gn/T/vela-vscode-extension-VZwSMs/e95cc7df99ba39b2f9ce74f365bf33ee.cue:10:21
+        // "vtx-static-site".attributes.status.details.buildUrl: reference "parameter" not found:
+        //     ./var/folders/1r/ftxlxmpx6g3dv3gng89htxdh0000gn/T/vela-vscode-extension-VZwSMs/e95cc7df99ba39b2f9ce74f365bf33ee.cue:10:59
+        return problem
+            .split('\n')
+            .reduce<[string, string][]>((result, value, index) => {
+                if (index % 2 == 0) {
+                    // Start a new pair for even indices
+                    result.push([value, '']);
+                } else {
+                    // Add to the previous pair for odd indices.
+                    result[result.length - 1] = [result[result.length - 1][0], value]
+                }
+                return result;
+            }, [])
+            .map(([message, location]) => ({
+                message,
+                range: this.findRange(document, location),
+                severity: vscode.DiagnosticSeverity.Error
+            }));
     }
 }
