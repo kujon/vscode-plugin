@@ -2,24 +2,18 @@ import * as vscode from 'vscode';
 import { CoreProblem, DiagnosticProvider } from './DiagnosticsProvider';
 import { spawn } from 'child_process';
 import { getToolPath } from './ToolManager';
-import { writeFileSync, rmSync, mkdtempSync } from 'fs';
-import { join } from 'node:path';
+import { writeFileSync, rmSync, mkdtempSync, readFileSync, readdirSync } from 'fs';
+import { join, dirname, basename } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomBytes } from 'crypto';
 
+type CueFileType =
+    'definition' |
+    'parameter' |
+    'template' |
+    'resource';
 export class CueVetDiagnosticsProvider implements DiagnosticProvider {
     private collection: vscode.DiagnosticCollection
-
-    private mockContext = `#Context: close({
-        appRevision:    string
-        appRevisionNum: int
-        appName:        string
-        name:           string
-        namespace:      string
-        output:         _
-        outputs:        _
-    })
-    context: #Context`;
 
     private tempDirectory: string | undefined;
 
@@ -70,9 +64,74 @@ export class CueVetDiagnosticsProvider implements DiagnosticProvider {
         return this.collection;
     }
 
+    private getCueFileType(document: vscode.TextDocument): CueFileType {
+        const dir = dirname(document.fileName);
+        const baseName = basename(document.fileName);
+
+        switch (true) {
+            case baseName === 'parameter.cue':
+                return 'parameter';
+            case baseName === 'template.cue':
+                return 'template';
+            case dir.endsWith('resources'):
+                return 'resource';
+            case dir.endsWith('definitions'):
+            default:
+                return 'definition';
+        }
+    }
+
+    private additionalContent(document: vscode.TextDocument): string {
+        switch (this.getCueFileType(document)) {
+            case 'definition':
+                return `#Context: close({
+                    appRevision:    string
+                    appRevisionNum: int
+                    appName:        string
+                    name:           string
+                    namespace:      string
+                    output:         _
+                    outputs:        _
+                })
+                context: #Context`;
+            case 'parameter':
+                return '';
+            case 'template': {
+                const addonDir = dirname(document.fileName);
+                const parameterFilePath = join(addonDir, 'parameter.cue');
+                const parameterContent = readFileSync(parameterFilePath, 'utf-8')
+                    .replace(/parameter:/, '#Parameter:');
+
+                const resourcesDir = join(addonDir, 'resources');
+                const resourcesContent = readdirSync(resourcesDir)
+                    .filter(file => file.endsWith('.cue'))
+                    .map(file => readFileSync(join(resourcesDir, file), 'utf-8'))
+                    .map(content => content.replace(/package .+\n/, ''))
+                    .join('\n');
+                return `
+                    ${parameterContent}
+                    parameter: close(#Parameter)
+                    ${resourcesContent}
+                `;
+            }
+            case 'resource': {
+                const resourceDir = dirname(document.fileName);
+                const addonDir = dirname(resourceDir);
+                const parameterFilePath = join(addonDir, 'parameter.cue');
+                const parameterContent = readFileSync(parameterFilePath, 'utf-8')
+                    .replace(/parameter:/, '#Parameter:');
+                return `
+                    ${parameterContent}
+                    parameter: close(#Parameter)
+                `;
+            }
+        }
+    }
+
     runCommand(document: vscode.TextDocument): Promise<string> {
         // This aims to replicate the technique suggested in https://kubevela-docs.oss-cn-beijing.aliyuncs.com/docs/v1.0/platform-engineers/debug-test-cue#debug-cue-template
-        const tempFileContent = document.getText().concat('\n').concat(this.mockContext);
+        const additionalContent = this.additionalContent(document);
+        const tempFileContent = document.getText().concat('\n').concat(additionalContent);
 
         const fileName = `${randomBytes(16).toString("hex")}.cue`;
 

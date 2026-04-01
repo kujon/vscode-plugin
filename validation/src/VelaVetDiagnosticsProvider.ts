@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { CoreProblem, DiagnosticProvider } from './DiagnosticsProvider';
 import { spawn } from 'child_process';
+import { dirname, basename } from 'node:path';
 import { getToolPath } from './ToolManager';
 
 export class VelaVetDiagnosticsProvider implements DiagnosticProvider {
@@ -23,7 +24,13 @@ export class VelaVetDiagnosticsProvider implements DiagnosticProvider {
     }
 
     isApplicable(document: vscode.TextDocument): boolean {
-        return document.languageId === 'cue' && document.getText().includes('template:');
+        const dir = dirname(document.fileName);
+        const baseName = basename(document.fileName);
+        return document.languageId === 'cue' &&
+            !dir.endsWith('resources') &&
+            baseName !== 'template.cue' &&
+            baseName !== 'parameter.cue' &&
+            document.getText().includes('template:');
     }
 
     getCollection(): vscode.DiagnosticCollection {
