@@ -1,12 +1,13 @@
 import * as vscode from 'vscode';
 import { CoreProblem, DiagnosticProvider } from './DiagnosticsProvider';
 import { getToolPath } from './ToolManager';
-import { writeFileSync, rmSync, mkdtempSync, readFileSync, readdirSync } from 'fs';
+import { writeFileSync, rmSync, mkdtempSync, readFileSync } from 'fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomBytes } from 'crypto';
-import { getCueFileType } from './utils/cue';
+import { getCueFileType, findResourcesDir } from './utils/cue';
 import { runCommand } from './utils/command';
+import { findCueFilesRecursively } from './utils/files';
 export class CueVetDiagnosticsProvider implements DiagnosticProvider {
     private collection: vscode.DiagnosticCollection
 
@@ -73,9 +74,18 @@ export class CueVetDiagnosticsProvider implements DiagnosticProvider {
     private getParameterContent(document: vscode.TextDocument): string {
         const currentDir = dirname(document.fileName);
         const fileType = getCueFileType(document);
-        const addonDir = fileType == 'resource' || fileType == 'definition' ?
-            dirname(currentDir) :
-            currentDir;
+        let addonDir: string;
+
+        if (fileType == 'resource') {
+            // For nested resources, find the resources dir then go up one level
+            const resourcesDir = findResourcesDir(document.fileName);
+            addonDir = resourcesDir ? dirname(resourcesDir) : dirname(currentDir);
+        } else if (fileType == 'definition') {
+            addonDir = dirname(currentDir);
+        } else {
+            addonDir = currentDir;
+        }
+
         const parameterFilePath = join(addonDir, 'parameter.cue');
         const parameterContent = this.processAdditionalContent(
             readFileSync(parameterFilePath, 'utf-8').replace(/parameter:/, '#Parameter:')
@@ -92,17 +102,18 @@ export class CueVetDiagnosticsProvider implements DiagnosticProvider {
         const fileType = getCueFileType(document);
         let resourcesDir: string = '';
         if (fileType === 'resource') {
-            resourcesDir = currentDir;
+            // For nested resources, find the root resources directory
+            resourcesDir = findResourcesDir(document.fileName);
         } else if (fileType === 'definition') {
             resourcesDir = join(dirname(currentDir), 'resources');
         } else if (fileType === 'parameter' || fileType === 'template') {
             resourcesDir = join(currentDir, 'resources');
         }
 
-        return readdirSync(resourcesDir)
-            .filter(file => file.endsWith('.cue'))
-            .filter(file => file !== document.fileName)
-            .map(file => readFileSync(join(resourcesDir, file), 'utf-8'))
+        const cueFiles = findCueFilesRecursively(resourcesDir, document.fileName);
+
+        return cueFiles
+            .map(file => readFileSync(file, 'utf-8'))
             .map(content => this.processAdditionalContent(content))
             .join('\n');
     }
@@ -190,28 +201,47 @@ export class CueVetDiagnosticsProvider implements DiagnosticProvider {
 
     findCoreProblems(document: vscode.TextDocument, problem: string): CoreProblem[] {
         // Sample error:
-        // 
+        //
         // "vtx-static-site".attributes.status.details.buildUrl: reference "parameter" not found:
         //     ./var/folders/1r/ftxlxmpx6g3dv3gng89htxdh0000gn/T/vela-vscode-extension-VZwSMs/e95cc7df99ba39b2f9ce74f365bf33ee.cue:10:21
-        // "vtx-static-site".attributes.status.details.buildUrl: reference "parameter" not found:
-        //     ./var/folders/1r/ftxlxmpx6g3dv3gng89htxdh0000gn/T/vela-vscode-extension-VZwSMs/e95cc7df99ba39b2f9ce74f365bf33ee.cue:10:59
-        return problem
-            .replace(/\n$/, '') // replace trailing newline
-            .split('\n')
-            .reduce<[string, string][]>((result, value, index) => {
-                if (index % 2 == 0) {
-                    // Start a new pair for even indices
-                    result.push([value, '']);
-                } else {
-                    // Add to the previous pair for odd indices.
-                    result[result.length - 1] = [result[result.length - 1][0], value]
-                }
-                return result;
-            }, [])
-            .map(([message, location]) => ({
-                message,
-                range: this.findRange(document, location),
-                severity: vscode.DiagnosticSeverity.Error
-            }));
+        //
+        // Or with multiple locations:
+        // awsProvider.properties.objects.0.spec.package: invalid interpolation: undefined field: awsProviderVersio:
+        //     ./var/folders/.../23f6fd7cc9374e8f0edf8f898054d4f8.cue:18:13
+        //     ./var/folders/.../23f6fd7cc9374e8f0edf8f898054d4f8.cue:18:67
+
+        const lines = problem.replace(/\n$/, '').split('\n');
+        const problems: CoreProblem[] = [];
+
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+
+            // Lines starting with whitespace are file locations
+            if (line.match(/^\s+/)) {
+                // Skip location lines - they're handled when we see the message
+                continue;
+            }
+
+            // This is an error message line
+            const message = line;
+
+            // Collect all following location lines
+            const locations: string[] = [];
+            for (let j = i + 1; j < lines.length && lines[j].match(/^\s+/); j++) {
+                locations.push(lines[j]);
+                i = j; // Skip these lines in outer loop
+            }
+
+            // Create a problem for each location
+            for (const location of locations) {
+                problems.push({
+                    message,
+                    range: this.findRange(document, location),
+                    severity: vscode.DiagnosticSeverity.Error
+                });
+            }
+        }
+
+        return problems;
     }
 }
