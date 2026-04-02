@@ -1,12 +1,12 @@
 import * as vscode from 'vscode';
 import { CoreProblem, DiagnosticProvider } from './DiagnosticsProvider';
-import { spawn } from 'child_process';
 import { getToolPath } from './ToolManager';
 import { writeFileSync, rmSync, mkdtempSync, readFileSync, readdirSync } from 'fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomBytes } from 'crypto';
 import { getCueFileType } from './utils/cue';
+import { runCommand } from './utils/command';
 export class CueVetDiagnosticsProvider implements DiagnosticProvider {
     private collection: vscode.DiagnosticCollection
 
@@ -143,7 +143,7 @@ export class CueVetDiagnosticsProvider implements DiagnosticProvider {
         }
     }
 
-    runCommand(document: vscode.TextDocument): Promise<string> {
+    async runCommand(document: vscode.TextDocument): Promise<string> {
         // This aims to replicate the technique suggested in https://kubevela-docs.oss-cn-beijing.aliyuncs.com/docs/v1.0/platform-engineers/debug-test-cue#debug-cue-template
         const additionalContent = this.additionalContent(document);
         const tempFileContent = document.getText().concat('\n').concat(additionalContent);
@@ -157,23 +157,19 @@ export class CueVetDiagnosticsProvider implements DiagnosticProvider {
         this.tempFileMap.set(document.uri.toString(), tempFilePath);
 
         const command = `${getToolPath('cue')} vet ${tempFilePath}`;
+        console.debug('Running command', command);
 
-        const process = spawn(command, { shell: true });
+        const { stdout, stderr } = await runCommand(command);
 
-        return new Promise((resolve, reject) => {
-            process.stdout.on('data', (data) => {
-                resolve(data.toString());
-            });
+        if (stderr) {
+            if (this.shouldTemporarilyIgnore(stderr)) {
+                return stderr;
+            } else {
+                throw stderr;
+            }
+        }
 
-            process.stderr.on('data', (data) => {
-                const problem = data.toString();
-                if (this.shouldTemporarilyIgnore(problem)) {
-                    resolve(problem);
-                } else {
-                    reject(problem);
-                }
-            });
-        });
+        return stdout;
     }
 
     private findRange(document: vscode.TextDocument, problem: string): vscode.Range {
