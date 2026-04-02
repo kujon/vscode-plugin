@@ -81,6 +81,51 @@ export class CueVetDiagnosticsProvider implements DiagnosticProvider {
         }
     }
 
+    private processAdditionalContent(content: string): string {
+        // package cannot be defined multiple times in a single file,
+        // so we remove it from the content we append to the main file.
+        return content.replace(/package .+\n/, '');
+    }
+
+    private getParameterContent(document: vscode.TextDocument): string {
+        const currentDir = dirname(document.fileName);
+        const fileType = this.getCueFileType(document);
+        const addonDir = fileType == 'resource' || fileType == 'definition' ?
+            dirname(currentDir) :
+            currentDir;
+        const parameterFilePath = join(addonDir, 'parameter.cue');
+        const parameterContent = this.processAdditionalContent(
+            readFileSync(parameterFilePath, 'utf-8').replace(/parameter:/, '#Parameter:')
+        );
+
+        return `
+            ${parameterContent}
+            parameter: close(#Parameter)
+        `
+    }
+
+    private getResourcesContent(document: vscode.TextDocument): string {
+        const currentDir = dirname(document.fileName);
+        const fileType = this.getCueFileType(document);
+        let resourcesDir: string = '';
+        if (fileType === 'resource') {
+            resourcesDir = currentDir;
+        } else if (fileType === 'definition') {
+            resourcesDir = join(dirname(currentDir), 'resources');
+        } else if (fileType === 'parameter' || fileType === 'template') {
+            resourcesDir = join(currentDir, 'resources');
+        }
+
+        return readdirSync(resourcesDir)
+            .filter(file => file.endsWith('.cue'))
+            .filter(file => file !== document.fileName)
+            .map(file => readFileSync(join(resourcesDir, file), 'utf-8'))
+            .map(content => this.processAdditionalContent(content))
+            .join('\n');
+    }
+
+    // Extra cue needs to be appended to the end of the file we are editing.
+    // Appended, so that we are not messing with original line numbers.
     private additionalContent(document: vscode.TextDocument): string {
         switch (this.getCueFileType(document)) {
             case 'definition':
@@ -97,34 +142,15 @@ export class CueVetDiagnosticsProvider implements DiagnosticProvider {
             case 'parameter':
                 return '';
             case 'template': {
-                const addonDir = dirname(document.fileName);
-                const parameterFilePath = join(addonDir, 'parameter.cue');
-                const parameterContent = readFileSync(parameterFilePath, 'utf-8')
-                    .replace(/package .+\n/, '')
-                    .replace(/parameter:/, '#Parameter:');
-
-                const resourcesDir = join(addonDir, 'resources');
-                const resourcesContent = readdirSync(resourcesDir)
-                    .filter(file => file.endsWith('.cue'))
-                    .map(file => readFileSync(join(resourcesDir, file), 'utf-8'))
-                    .map(content => content.replace(/package .+\n/, ''))
-                    .join('\n');
                 return `
-                    ${parameterContent}
-                    parameter: close(#Parameter)
-                    ${resourcesContent}
+                    ${this.getParameterContent(document)}
+                    ${this.getResourcesContent(document)}
                 `;
             }
             case 'resource': {
-                const resourceDir = dirname(document.fileName);
-                const addonDir = dirname(resourceDir);
-                const parameterFilePath = join(addonDir, 'parameter.cue');
-                const parameterContent = readFileSync(parameterFilePath, 'utf-8')
-                    .replace(/package .+\n/, '')
-                    .replace(/parameter:/, '#Parameter:');
                 return `
-                    ${parameterContent}
-                    parameter: close(#Parameter)
+                    ${this.getParameterContent(document)}
+                    ${this.getResourcesContent(document)}
                 `;
             }
         }
