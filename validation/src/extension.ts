@@ -5,16 +5,22 @@ import { DiagnosticProvider } from './DiagnosticsProvider';
 import { CueVetDiagnosticsProvider } from './CueVetDiagnosticsProvider';
 import { VelaVetDiagnosticsProvider } from './VelaVetDiagnosticsProvider';
 import { VelaYamlSchemaProvider } from './VelaYamlSchemaProvider';
+import { CueVetCodeLensProvider } from './CueVetCodeLensProvider';
 import { checkTools } from './ToolManager';
 
 let disposables: Disposable[] = [];
 
 
-async function updateDiagnostics(document: vscode.TextDocument, diagnosticProvider: DiagnosticProvider): Promise<void> {
+async function updateDiagnostics(document: vscode.TextDocument, diagnosticProvider: DiagnosticProvider, codeLensProvider?: CueVetCodeLensProvider): Promise<void> {
   if (diagnosticProvider.isApplicable(document)) {
     try {
       await diagnosticProvider.runCommand(document);
       diagnosticProvider.getCollection().clear();
+
+      // Refresh CodeLens after running command
+      if (codeLensProvider && diagnosticProvider instanceof CueVetDiagnosticsProvider) {
+        codeLensProvider.refresh();
+      }
     } catch (problem) {
       console.debug(problem);
 
@@ -32,15 +38,22 @@ async function updateDiagnostics(document: vscode.TextDocument, diagnosticProvid
           ]
         }))
       );
+
+      // Refresh CodeLens after diagnostics are set
+      if (codeLensProvider && diagnosticProvider instanceof CueVetDiagnosticsProvider) {
+        codeLensProvider.refresh();
+      }
     }
   } else {
     diagnosticProvider.getCollection().clear();
   }
 }
 
+const cueVetDiagnosticsProvider = new CueVetDiagnosticsProvider(languages.createDiagnosticCollection('cue vet'));
+
 const diagnosticProviders: DiagnosticProvider[] = [
   new VelaVetDiagnosticsProvider(languages.createDiagnosticCollection('vela vet')),
-  new CueVetDiagnosticsProvider(languages.createDiagnosticCollection('cue vet'))
+  cueVetDiagnosticsProvider
 ];
 
 export async function activate(context: ExtensionContext) {
@@ -49,20 +62,29 @@ export async function activate(context: ExtensionContext) {
   const yamlSchemaProvider = new VelaYamlSchemaProvider(context.globalStorageUri.fsPath);
   await yamlSchemaProvider.register();
 
+  // Register CodeLens provider for CUE files
+  const cueVetCodeLensProvider = new CueVetCodeLensProvider(cueVetDiagnosticsProvider);
+  context.subscriptions.push(
+    languages.registerCodeLensProvider(
+      { language: 'cue' },
+      cueVetCodeLensProvider
+    )
+  );
+
   for (const provider of diagnosticProviders) {
     provider.activate();
   }
 
   if (window.activeTextEditor) {
     for (const provider of diagnosticProviders) {
-      updateDiagnostics(window.activeTextEditor.document, provider);
+      updateDiagnostics(window.activeTextEditor.document, provider, cueVetCodeLensProvider);
     }
   }
 
   context.subscriptions.push(workspace.onDidChangeTextDocument(documentEvent => {
     if (documentEvent) {
       for (const provider of diagnosticProviders) {
-        updateDiagnostics(documentEvent.document, provider);
+        updateDiagnostics(documentEvent.document, provider, cueVetCodeLensProvider);
       }
     }
   }));
@@ -70,7 +92,7 @@ export async function activate(context: ExtensionContext) {
   context.subscriptions.push(window.onDidChangeActiveTextEditor(editor => {
     if (editor) {
       for (const provider of diagnosticProviders) {
-        updateDiagnostics(editor.document, provider);
+        updateDiagnostics(editor.document, provider, cueVetCodeLensProvider);
       }
     }
   }));

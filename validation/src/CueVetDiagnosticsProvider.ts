@@ -3,19 +3,15 @@ import { CoreProblem, DiagnosticProvider } from './DiagnosticsProvider';
 import { spawn } from 'child_process';
 import { getToolPath } from './ToolManager';
 import { writeFileSync, rmSync, mkdtempSync, readFileSync, readdirSync } from 'fs';
-import { join, dirname, basename } from 'node:path';
+import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomBytes } from 'crypto';
-
-type CueFileType =
-    'definition' |
-    'parameter' |
-    'template' |
-    'resource';
+import { getCueFileType } from './utils/cue';
 export class CueVetDiagnosticsProvider implements DiagnosticProvider {
     private collection: vscode.DiagnosticCollection
 
     private tempDirectory: string | undefined;
+    private tempFileMap: Map<string, string> = new Map();
 
     constructor(collection: vscode.DiagnosticCollection) {
         this.collection = collection;
@@ -34,7 +30,7 @@ export class CueVetDiagnosticsProvider implements DiagnosticProvider {
     }
 
     getName(): string {
-        return 'cue';
+        return 'cue vet';
     }
 
     isApplicable(document: vscode.TextDocument): boolean {
@@ -64,21 +60,8 @@ export class CueVetDiagnosticsProvider implements DiagnosticProvider {
         return this.collection;
     }
 
-    private getCueFileType(document: vscode.TextDocument): CueFileType {
-        const dir = dirname(document.fileName);
-        const baseName = basename(document.fileName);
-
-        switch (true) {
-            case baseName === 'parameter.cue':
-                return 'parameter';
-            case baseName === 'template.cue':
-                return 'template';
-            case dir.endsWith('resources'):
-                return 'resource';
-            case dir.endsWith('definitions'):
-            default:
-                return 'definition';
-        }
+    getTempFilePath(document: vscode.TextDocument): string | undefined {
+        return this.tempFileMap.get(document.uri.toString());
     }
 
     private processAdditionalContent(content: string): string {
@@ -89,7 +72,7 @@ export class CueVetDiagnosticsProvider implements DiagnosticProvider {
 
     private getParameterContent(document: vscode.TextDocument): string {
         const currentDir = dirname(document.fileName);
-        const fileType = this.getCueFileType(document);
+        const fileType = getCueFileType(document);
         const addonDir = fileType == 'resource' || fileType == 'definition' ?
             dirname(currentDir) :
             currentDir;
@@ -106,7 +89,7 @@ export class CueVetDiagnosticsProvider implements DiagnosticProvider {
 
     private getResourcesContent(document: vscode.TextDocument): string {
         const currentDir = dirname(document.fileName);
-        const fileType = this.getCueFileType(document);
+        const fileType = getCueFileType(document);
         let resourcesDir: string = '';
         if (fileType === 'resource') {
             resourcesDir = currentDir;
@@ -127,7 +110,7 @@ export class CueVetDiagnosticsProvider implements DiagnosticProvider {
     // Extra cue needs to be appended to the end of the file we are editing.
     // Appended, so that we are not messing with original line numbers.
     private additionalContent(document: vscode.TextDocument): string {
-        switch (this.getCueFileType(document)) {
+        switch (getCueFileType(document)) {
             case 'definition':
                 return `#Context: close({
                     appRevision:    string
@@ -153,6 +136,10 @@ export class CueVetDiagnosticsProvider implements DiagnosticProvider {
                     ${this.getResourcesContent(document)}
                 `;
             }
+            case 'unknown':
+                return '';
+            case 'generated':
+                return '';
         }
     }
 
@@ -162,10 +149,14 @@ export class CueVetDiagnosticsProvider implements DiagnosticProvider {
         const tempFileContent = document.getText().concat('\n').concat(additionalContent);
 
         const fileName = `${randomBytes(16).toString("hex")}.cue`;
+        const tempFilePath = `${this.tempDirectory}/${fileName}`;
 
-        writeFileSync(`${this.tempDirectory}/${fileName}`, tempFileContent);
+        writeFileSync(tempFilePath, tempFileContent);
 
-        const command = `${getToolPath('cue')} vet ${this.tempDirectory}/${fileName}`;
+        // Store the temp file path for this document
+        this.tempFileMap.set(document.uri.toString(), tempFilePath);
+
+        const command = `${getToolPath('cue')} vet ${tempFilePath}`;
 
         const process = spawn(command, { shell: true });
 

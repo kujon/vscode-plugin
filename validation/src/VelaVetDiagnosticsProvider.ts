@@ -1,8 +1,8 @@
 import * as vscode from 'vscode';
 import { CoreProblem, DiagnosticProvider } from './DiagnosticsProvider';
 import { spawn } from 'child_process';
-import { dirname, basename } from 'node:path';
 import { getToolPath } from './ToolManager';
+import { getCueFileType } from './utils/cue';
 
 export class VelaVetDiagnosticsProvider implements DiagnosticProvider {
     private collection: vscode.DiagnosticCollection
@@ -20,17 +20,11 @@ export class VelaVetDiagnosticsProvider implements DiagnosticProvider {
     }
 
     getName(): string {
-        return 'vela';
+        return 'vela def vet';
     }
 
     isApplicable(document: vscode.TextDocument): boolean {
-        const dir = dirname(document.fileName);
-        const baseName = basename(document.fileName);
-        return document.languageId === 'cue' &&
-            !dir.endsWith('resources') &&
-            baseName !== 'template.cue' &&
-            baseName !== 'parameter.cue' &&
-            document.getText().includes('template:');
+        return getCueFileType(document) === 'definition';
     }
 
     getCollection(): vscode.DiagnosticCollection {
