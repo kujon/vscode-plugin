@@ -1,18 +1,17 @@
 import * as vscode from 'vscode';
 import { CoreProblem, DiagnosticProvider } from './DiagnosticsProvider';
 import { getToolPath } from './ToolManager';
-import { writeFileSync, rmSync, mkdtempSync, readFileSync } from 'fs';
-import { join, dirname } from 'node:path';
-import { tmpdir } from 'node:os';
-import { randomBytes } from 'crypto';
+import { dirname, join, relative } from 'node:path';
 import { getCueFileType, findResourcesDir } from './utils/cue';
 import { runCommand } from './utils/command';
-import { findCueFilesRecursively } from './utils/files';
+import { writeFileSync, rmSync, mkdtempSync, copyFileSync, readdirSync, statSync, mkdirSync, existsSync } from 'fs';
+import { tmpdir } from 'node:os';
+import { createHash } from 'crypto';
+
 export class CueVetDiagnosticsProvider implements DiagnosticProvider {
     private collection: vscode.DiagnosticCollection
-
     private tempDirectory: string | undefined;
-    private tempFileMap: Map<string, string> = new Map();
+    private tempDirMap: Map<string, string> = new Map();
 
     constructor(collection: vscode.DiagnosticCollection) {
         this.collection = collection;
@@ -61,113 +60,116 @@ export class CueVetDiagnosticsProvider implements DiagnosticProvider {
         return this.collection;
     }
 
-    getTempFilePath(document: vscode.TextDocument): string | undefined {
-        return this.tempFileMap.get(document.uri.toString());
+    getTempDirPath(document: vscode.TextDocument): string | undefined {
+        return this.tempDirMap.get(document.uri.toString());
     }
 
-    private processAdditionalContent(content: string): string {
-        // package cannot be defined multiple times in a single file,
-        // so we remove it from the content we append to the main file.
-        return content.replace(/package .+\n/, '');
-    }
-
-    private getParameterContent(document: vscode.TextDocument): string {
+    private getAddonDirectory(document: vscode.TextDocument): string {
         const currentDir = dirname(document.fileName);
         const fileType = getCueFileType(document);
-        let addonDir: string;
 
-        if (fileType == 'resource') {
+        if (fileType === 'resource') {
             // For nested resources, find the resources dir then go up one level
             const resourcesDir = findResourcesDir(document.fileName);
-            addonDir = resourcesDir ? dirname(resourcesDir) : dirname(currentDir);
-        } else if (fileType == 'definition') {
-            addonDir = dirname(currentDir);
-        } else {
-            addonDir = currentDir;
-        }
-
-        const parameterFilePath = join(addonDir, 'parameter.cue');
-        const parameterContent = this.processAdditionalContent(
-            readFileSync(parameterFilePath, 'utf-8').replace(/parameter:/, '#Parameter:')
-        );
-
-        return `
-            ${parameterContent}
-            parameter: close(#Parameter)
-        `
-    }
-
-    private getResourcesContent(document: vscode.TextDocument): string {
-        const currentDir = dirname(document.fileName);
-        const fileType = getCueFileType(document);
-        let resourcesDir: string = '';
-        if (fileType === 'resource') {
-            // For nested resources, find the root resources directory
-            resourcesDir = findResourcesDir(document.fileName);
+            return resourcesDir ? dirname(resourcesDir) : dirname(currentDir);
         } else if (fileType === 'definition') {
-            resourcesDir = join(dirname(currentDir), 'resources');
-        } else if (fileType === 'parameter' || fileType === 'template') {
-            resourcesDir = join(currentDir, 'resources');
+            return dirname(currentDir);
+        } else {
+            return currentDir;
         }
-
-        const cueFiles = findCueFilesRecursively(resourcesDir, document.fileName);
-
-        return cueFiles
-            .map(file => readFileSync(file, 'utf-8'))
-            .map(content => this.processAdditionalContent(content))
-            .join('\n');
     }
 
-    // Extra cue needs to be appended to the end of the file we are editing.
-    // Appended, so that we are not messing with original line numbers.
-    private additionalContent(document: vscode.TextDocument): string {
-        switch (getCueFileType(document)) {
+    private getAdditionalContent(document: vscode.TextDocument): string {
+        const fileType = getCueFileType(document);
+
+        switch (fileType) {
             case 'definition':
-                return `#Context: close({
-                    appRevision:    string
-                    appRevisionNum: int
-                    appName:        string
-                    name:           string
-                    namespace:      string
-                    output:         _
-                    outputs:        _
-                })
-                context: #Context`;
-            case 'parameter':
-                return '';
-            case 'template': {
                 return `
-                    ${this.getParameterContent(document)}
-                    ${this.getResourcesContent(document)}
-                `;
-            }
-            case 'resource': {
-                return `
-                    ${this.getParameterContent(document)}
-                    ${this.getResourcesContent(document)}
-                `;
-            }
-            case 'unknown':
+#Context: close({
+    appRevision:    string
+    appRevisionNum: int
+    appName:        string
+    name:           string
+    namespace:      string
+    output:         _
+    outputs:        _
+})
+context: #Context`;
+            default:
                 return '';
-            case 'generated':
-                return '';
+        }
+    }
+
+    private copyDirectoryFilesToTemp(addonDir: string, tempDir: string, currentFileName: string, relativePath: string = ''): void {
+        const currentDir = join(addonDir, relativePath);
+        const files = readdirSync(currentDir);
+
+        for (const file of files) {
+            const sourcePath = join(currentDir, file);
+            const relativeFilePath = join(relativePath, file);
+            const stat = statSync(sourcePath);
+
+            // Skip cue.mod directory
+            if (stat.isDirectory() && file === 'cue.mod') {
+                continue;
+            }
+
+            // Recursively copy subdirectories
+            if (stat.isDirectory()) {
+                const destSubDir = join(tempDir, relativeFilePath);
+                mkdirSync(destSubDir, { recursive: true });
+                this.copyDirectoryFilesToTemp(addonDir, tempDir, currentFileName, relativeFilePath);
+                continue;
+            }
+
+            // Only copy .cue files
+            if (!file.endsWith('.cue')) {
+                continue;
+            }
+
+            const destPath = join(tempDir, relativeFilePath);
+
+            // Don't copy the current file yet - we'll write it with additional content
+            if (sourcePath === currentFileName) {
+                continue;
+            }
+
+            copyFileSync(sourcePath, destPath);
         }
     }
 
     async runCommand(document: vscode.TextDocument): Promise<string> {
-        // This aims to replicate the technique suggested in https://kubevela-docs.oss-cn-beijing.aliyuncs.com/docs/v1.0/platform-engineers/debug-test-cue#debug-cue-template
-        const additionalContent = this.additionalContent(document);
-        const tempFileContent = document.getText().concat('\n').concat(additionalContent);
+        const addonDir = this.getAddonDirectory(document);
 
-        const fileName = `${randomBytes(16).toString("hex")}.cue`;
-        const tempFilePath = `${this.tempDirectory}/${fileName}`;
+        // Create a stable temp directory for this document (based on hash of file path)
+        const docHash = createHash('md5').update(document.fileName).digest('hex').substring(0, 8);
+        const tempDir = join(this.tempDirectory!, docHash);
 
-        writeFileSync(tempFilePath, tempFileContent);
+        // Clean up old temp dir if it exists
+        if (existsSync(tempDir)) {
+            rmSync(tempDir, { recursive: true });
+        }
+        mkdirSync(tempDir, { recursive: true });
 
-        // Store the temp file path for this document
-        this.tempFileMap.set(document.uri.toString(), tempFilePath);
+        // Store the temp directory path for this document
+        this.tempDirMap.set(document.uri.toString(), tempDir);
 
-        const command = `${getToolPath('cue')} vet ${tempFilePath}`;
+        // Copy all CUE files from addon directory to temp
+        this.copyDirectoryFilesToTemp(addonDir, tempDir, document.fileName);
+
+        // Write the current document with any additional content needed
+        // Preserve the relative path from addon directory
+        const relativeFilePath = relative(addonDir, document.fileName);
+        const additionalContent = this.getAdditionalContent(document);
+        const fileContent = document.getText().concat('\n').concat(additionalContent);
+        const tempFilePath = join(tempDir, relativeFilePath);
+
+        // Ensure parent directory exists
+        mkdirSync(dirname(tempFilePath), { recursive: true });
+        writeFileSync(tempFilePath, fileContent);
+
+        // Vet all CUE files in the temp directory
+        const command = `cd "${tempDir}" && ${getToolPath('cue')} vet $(find . -not -path "./cue.mod/**/*" -name "*.cue") -c=false`;
         console.debug('Running command', command);
 
         const { stdout, stderr } = await runCommand(command);
@@ -183,33 +185,45 @@ export class CueVetDiagnosticsProvider implements DiagnosticProvider {
         return stdout;
     }
 
-    private findRange(document: vscode.TextDocument, problem: string): vscode.Range {
-        // ./var/folders/1r/ftxlxmpx6g3dv3gng89htxdh0000gn/T/vela-vscode-extension-VZwSMs/e95cc7df99ba39b2f9ce74f365bf33ee.cue:10:21
-        const lineAndColumn = problem.match(/(.+)\:(\d+)\:(\d+)\n?$/)?.slice(2).map(val => parseInt(val, 10) - 1);
+    private findRange(document: vscode.TextDocument, addonDir: string, locationLine: string): vscode.Range | null {
+        // Parse location line like: "    ./component/vtx-job.cue:10:21"
+        const match = locationLine.trim().match(/^\.\/(.+):(\d+):(\d+)$/);
 
-        if (lineAndColumn?.length == 2) {
-            let [line, column] = lineAndColumn;
-
-            return new vscode.Range(
-                new vscode.Position(line, column),
-                document.positionAt(document.offsetAt(new vscode.Position(line + 1, 0)) - 1)
-            );
-        } else {
-            return new vscode.Range(new vscode.Position(0, 0), new vscode.Position(document.lineCount, 0));
+        if (!match) {
+            return null;
         }
+
+        const [, relativeFilePath, lineStr, columnStr] = match;
+
+        // Calculate the relative path of the current document from addon directory
+        const currentDocRelativePath = relative(addonDir, document.fileName);
+
+        // Only return a range if this error is for the current document
+        if (relativeFilePath !== currentDocRelativePath) {
+            return null;
+        }
+
+        const line = parseInt(lineStr, 10) - 1;
+        const column = parseInt(columnStr, 10) - 1;
+
+        return new vscode.Range(
+            new vscode.Position(line, column),
+            document.positionAt(document.offsetAt(new vscode.Position(line + 1, 0)) - 1)
+        );
     }
 
     findCoreProblems(document: vscode.TextDocument, problem: string): CoreProblem[] {
         // Sample error:
         //
-        // "vtx-static-site".attributes.status.details.buildUrl: reference "parameter" not found:
-        //     ./var/folders/1r/ftxlxmpx6g3dv3gng89htxdh0000gn/T/vela-vscode-extension-VZwSMs/e95cc7df99ba39b2f9ce74f365bf33ee.cue:10:21
+        // output.spec.components: reference "sagemakerdomain" not found:
+        //     ./template.cue:16:4
         //
         // Or with multiple locations:
         // awsProvider.properties.objects.0.spec.package: invalid interpolation: undefined field: awsProviderVersio:
-        //     ./var/folders/.../23f6fd7cc9374e8f0edf8f898054d4f8.cue:18:13
-        //     ./var/folders/.../23f6fd7cc9374e8f0edf8f898054d4f8.cue:18:67
+        //     ./provider.cue:18:13
+        //     ./provider.cue:18:67
 
+        const addonDir = this.getAddonDirectory(document);
         const lines = problem.replace(/\n$/, '').split('\n');
         const problems: CoreProblem[] = [];
 
@@ -232,13 +246,16 @@ export class CueVetDiagnosticsProvider implements DiagnosticProvider {
                 i = j; // Skip these lines in outer loop
             }
 
-            // Create a problem for each location
+            // Create a problem for each location that belongs to the current document
             for (const location of locations) {
-                problems.push({
-                    message,
-                    range: this.findRange(document, location),
-                    severity: vscode.DiagnosticSeverity.Error
-                });
+                const range = this.findRange(document, addonDir, location);
+                if (range) {
+                    problems.push({
+                        message,
+                        range,
+                        severity: vscode.DiagnosticSeverity.Error
+                    });
+                }
             }
         }
 

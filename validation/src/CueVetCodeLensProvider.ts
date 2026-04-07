@@ -17,16 +17,16 @@ export class CueVetCodeLensProvider implements vscode.CodeLensProvider {
             return [];
         }
 
-        const tempFilePath = this.diagnosticsProvider.getTempFilePath(document);
-        if (!tempFilePath) {
+        const tempDirPath = this.diagnosticsProvider.getTempDirPath(document);
+        if (!tempDirPath) {
             return [];
         }
 
         const topOfDocument = new vscode.Range(0, 0, 0, 0);
         const codeLens = new vscode.CodeLens(topOfDocument, {
-            title: `$(file-code) Vela ${getCueFileType(document)}`,
-            command: 'vscode.open',
-            arguments: [vscode.Uri.file(tempFilePath)]
+            title: `$(folder) View processed ${getCueFileType(document)} files`,
+            command: 'revealFileInOS',
+            arguments: [vscode.Uri.file(tempDirPath)]
         });
 
         return [codeLens];
