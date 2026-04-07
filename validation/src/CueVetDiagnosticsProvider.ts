@@ -169,6 +169,7 @@ context: #Context`;
         writeFileSync(tempFilePath, fileContent);
 
         // Vet all CUE files in the temp directory
+        // https://github.com/cue-lang/cue/discussions/2747#discussioncomment-7972009
         const command = `cd "${tempDir}" && ${getToolPath('cue')} vet $(find . -not -path "./cue.mod/**/*" -name "*.cue") -c=false`;
         console.debug('Running command', command);
 
