@@ -9,7 +9,8 @@ import { CueVetCodeLensProvider } from './CueVetCodeLensProvider';
 import { checkTools } from './ToolManager';
 
 let disposables: Disposable[] = [];
-
+const documentUpdateTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const DEBOUNCE_DELAY = 500; // milliseconds
 
 async function updateDiagnostics(document: vscode.TextDocument, diagnosticProvider: DiagnosticProvider, codeLensProvider?: CueVetCodeLensProvider): Promise<void> {
   if (diagnosticProvider.isApplicable(document)) {
@@ -49,6 +50,28 @@ async function updateDiagnostics(document: vscode.TextDocument, diagnosticProvid
   }
 }
 
+function updateDiagnosticsDebounced(document: vscode.TextDocument, diagnosticProviders: DiagnosticProvider[], codeLensProvider?: CueVetCodeLensProvider): void {
+  const key = document.uri.toString();
+
+  // Clear existing timer for this document
+  const existingTimer = documentUpdateTimers.get(key);
+  if (existingTimer) {
+    clearTimeout(existingTimer);
+  }
+
+  // Set new timer
+  const timer = setTimeout(() => {
+    documentUpdateTimers.delete(key);
+    for (const provider of diagnosticProviders) {
+      updateDiagnostics(document, provider, codeLensProvider).catch((err) => {
+        console.error('Error updating diagnostics:', err);
+      });
+    }
+  }, DEBOUNCE_DELAY);
+
+  documentUpdateTimers.set(key, timer);
+}
+
 const cueVetDiagnosticsProvider = new CueVetDiagnosticsProvider(languages.createDiagnosticCollection('cue vet'));
 
 const diagnosticProviders: DiagnosticProvider[] = [
@@ -83,14 +106,13 @@ export async function activate(context: ExtensionContext) {
 
   context.subscriptions.push(workspace.onDidChangeTextDocument(documentEvent => {
     if (documentEvent) {
-      for (const provider of diagnosticProviders) {
-        updateDiagnostics(documentEvent.document, provider, cueVetCodeLensProvider);
-      }
+      updateDiagnosticsDebounced(documentEvent.document, diagnosticProviders, cueVetCodeLensProvider);
     }
   }));
 
   context.subscriptions.push(window.onDidChangeActiveTextEditor(editor => {
     if (editor) {
+      // Don't debounce when switching editors - run immediately
       for (const provider of diagnosticProviders) {
         updateDiagnostics(editor.document, provider, cueVetCodeLensProvider);
       }
@@ -100,6 +122,12 @@ export async function activate(context: ExtensionContext) {
 
 // this method is called when your extension is deactivated
 export function deactivate() {
+  // Clear all pending timers
+  for (const timer of documentUpdateTimers.values()) {
+    clearTimeout(timer);
+  }
+  documentUpdateTimers.clear();
+
   if (disposables) {
     disposables.forEach(item => item.dispose());
   }

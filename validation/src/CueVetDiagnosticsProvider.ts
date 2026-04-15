@@ -1,11 +1,11 @@
 import * as vscode from 'vscode';
 import { CoreProblem, DiagnosticProvider } from './DiagnosticsProvider';
 import { getToolPath } from './ToolManager';
-import { dirname, join, relative } from 'node:path';
+import { dirname, join, relative } from 'path';
 import { getCueFileType, findResourcesDir } from './utils/cue';
 import { runCommand } from './utils/command';
-import { writeFileSync, rmSync, mkdtempSync, copyFileSync, readdirSync, statSync, mkdirSync, existsSync } from 'fs';
-import { tmpdir } from 'node:os';
+import { mkdtempSync, existsSync, rmSync, promises as fs } from 'fs';
+import { tmpdir } from 'os';
 import { createHash } from 'crypto';
 
 export class CueVetDiagnosticsProvider implements DiagnosticProvider {
@@ -100,14 +100,14 @@ context: #Context`;
         }
     }
 
-    private copyDirectoryFilesToTemp(addonDir: string, tempDir: string, currentFileName: string, relativePath: string = ''): void {
+    private async copyDirectoryFilesToTemp(addonDir: string, tempDir: string, currentFileName: string, relativePath: string = ''): Promise<void> {
         const currentDir = join(addonDir, relativePath);
-        const files = readdirSync(currentDir);
+        const files = await fs.readdir(currentDir);
 
         for (const file of files) {
             const sourcePath = join(currentDir, file);
             const relativeFilePath = join(relativePath, file);
-            const stat = statSync(sourcePath);
+            const stat = await fs.stat(sourcePath);
 
             // Skip cue.mod directory
             if (stat.isDirectory() && file === 'cue.mod') {
@@ -117,8 +117,8 @@ context: #Context`;
             // Recursively copy subdirectories
             if (stat.isDirectory()) {
                 const destSubDir = join(tempDir, relativeFilePath);
-                mkdirSync(destSubDir, { recursive: true });
-                this.copyDirectoryFilesToTemp(addonDir, tempDir, currentFileName, relativeFilePath);
+                await fs.mkdir(destSubDir, { recursive: true });
+                await this.copyDirectoryFilesToTemp(addonDir, tempDir, currentFileName, relativeFilePath);
                 continue;
             }
 
@@ -134,7 +134,7 @@ context: #Context`;
                 continue;
             }
 
-            copyFileSync(sourcePath, destPath);
+            await fs.copyFile(sourcePath, destPath);
         }
     }
 
@@ -149,13 +149,13 @@ context: #Context`;
         if (existsSync(tempDir)) {
             rmSync(tempDir, { recursive: true });
         }
-        mkdirSync(tempDir, { recursive: true });
+        await fs.mkdir(tempDir, { recursive: true });
 
         // Store the temp directory path for this document
         this.tempDirMap.set(document.uri.toString(), tempDir);
 
         // Copy all CUE files from addon directory to temp
-        this.copyDirectoryFilesToTemp(addonDir, tempDir, document.fileName);
+        await this.copyDirectoryFilesToTemp(addonDir, tempDir, document.fileName);
 
         // Write the current document with any additional content needed
         // Preserve the relative path from addon directory
@@ -165,8 +165,8 @@ context: #Context`;
         const tempFilePath = join(tempDir, relativeFilePath);
 
         // Ensure parent directory exists
-        mkdirSync(dirname(tempFilePath), { recursive: true });
-        writeFileSync(tempFilePath, fileContent);
+        await fs.mkdir(dirname(tempFilePath), { recursive: true });
+        await fs.writeFile(tempFilePath, fileContent);
 
         // Vet all CUE files in the temp directory
         // https://github.com/cue-lang/cue/discussions/2747#discussioncomment-7972009

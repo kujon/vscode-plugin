@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
-import { exec, execSync } from 'child_process';
+import { exec } from 'child_process';
 import { promisify } from 'util';
 import { getToolPath } from './ToolManager';
 
@@ -10,16 +10,18 @@ const execAsync = promisify(exec);
 const SCHEMA_ID = 'vela-application';
 const CACHE_FILENAME = 'vela-application-schema.json';
 
-function getK8sContext(): string {
+async function getK8sContext(): Promise<string | null> {
     try {
-        return execSync(`${getToolPath('kubectl')} config current-context`, { encoding: 'utf-8', timeout: 5_000 }).trim();
+        const { stdout } = await execAsync(`${getToolPath('kubectl')} config current-context`, { encoding: 'utf-8', timeout: 5_000 });
+        return stdout.trim();
     } catch {
-        return 'unknown';
+        return null;
     }
 }
 
-function buildSchemaUri(context: string, version: number): string {
-    return `${SCHEMA_ID}://schema/${version}/KubeVela Application | Cluster ${context}`;
+function buildSchemaUri(context: string | null, version: number): string {
+    const clusterInfo = context ? `Cluster ${context}` : 'No cluster';
+    return `${SCHEMA_ID}://schema/${version}/KubeVela Application | ${clusterInfo}`;
 }
 
 const OAM_API_VERSION = 'core.oam.dev/v1beta1';
@@ -64,11 +66,7 @@ function isVelaApplication(content: string): boolean {
 
 const KUBECTL_OPTS = { timeout: 10_000, maxBuffer: 10 * 1024 * 1024 };
 
-function kubectlSync(args: string): string {
-    return execSync(`${getToolPath('kubectl')} ${args}`, { encoding: 'utf-8', ...KUBECTL_OPTS });
-}
-
-async function kubectlAsync(args: string): Promise<string> {
+async function kubectl(args: string): Promise<string> {
     const { stdout } = await execAsync(`${getToolPath('kubectl')} ${args}`, KUBECTL_OPTS);
     return stdout;
 }
@@ -371,13 +369,16 @@ export class VelaYamlSchemaProvider {
     private schemaVersion = 0;
     private refreshing = false;
     private cachePath: string;
+    private k8sContext: string | null | undefined;
+    private fetchingContext = false;
 
     constructor(private storagePath: string) {
         this.cachePath = path.join(storagePath, CACHE_FILENAME);
-        this.loadCache();
     }
 
     async register(): Promise<void> {
+        await this.loadCache();
+
         const yamlExtension = vscode.extensions.getExtension<YamlExtensionApi>('redhat.vscode-yaml');
         if (!yamlExtension) {
             console.warn('YAML extension not found. Schema support disabled.');
@@ -401,29 +402,29 @@ export class VelaYamlSchemaProvider {
         );
     }
 
-    private loadCache(): void {
+    private async loadCache(): Promise<void> {
         try {
             if (fs.existsSync(this.cachePath)) {
-                this.schemaContent = fs.readFileSync(this.cachePath, 'utf-8');
+                this.schemaContent = await fs.promises.readFile(this.cachePath, 'utf-8');
             }
         } catch (err) {
             console.warn('Failed to load schema cache:', err);
         }
     }
 
-    private writeCache(content: string): void {
+    private async writeCache(content: string): Promise<void> {
         try {
-            fs.mkdirSync(this.storagePath, { recursive: true });
-            fs.writeFileSync(this.cachePath, content, 'utf-8');
+            await fs.promises.mkdir(this.storagePath, { recursive: true });
+            await fs.promises.writeFile(this.cachePath, content, 'utf-8');
         } catch (err) {
             console.warn('Failed to write schema cache:', err);
         }
     }
 
-    private fetchConfigMapSchemasSync(nameListOutput: string, prefix: string): Map<string, JsonObject> {
+    private async fetchConfigMapSchemas(nameListOutput: string, prefix: string): Promise<Map<string, JsonObject>> {
         const schemas = new Map<string, JsonObject>();
         for (const name of filterConfigMapNames(nameListOutput, prefix)) {
-            const entry = parseConfigMapSchema(name, prefix, kubectlSync(`get configmap ${name} -n vela-system -o json`));
+            const entry = parseConfigMapSchema(name, prefix, await kubectl(`get configmap ${name} -n vela-system -o json`));
             if (entry) {
                 schemas.set(...entry);
             }
@@ -431,30 +432,39 @@ export class VelaYamlSchemaProvider {
         return schemas;
     }
 
-    private async fetchConfigMapSchemasAsync(nameListOutput: string, prefix: string): Promise<Map<string, JsonObject>> {
-        const schemas = new Map<string, JsonObject>();
-        for (const name of filterConfigMapNames(nameListOutput, prefix)) {
-            const entry = parseConfigMapSchema(name, prefix, await kubectlAsync(`get configmap ${name} -n vela-system -o json`));
-            if (entry) {
-                schemas.set(...entry);
-            }
-        }
-        return schemas;
-    }
-
-    private fetchSchemaFromClusterSync(): void {
-        const appSchema = parseApplicationSchema(kubectlSync('get --raw /openapi/v3/apis/core.oam.dev/v1beta1'));
-        const cmNameList = kubectlSync('get configmaps -n vela-system -o name');
-        const defs = parseDefinitions(kubectlSync('get componentdefinitions.core.oam.dev,traitdefinitions.core.oam.dev,policydefinitions.core.oam.dev -n vela-system -o json'));
+    private async fetchSchemaFromCluster(): Promise<void> {
+        const context = await this.getK8sContextCached();
+        const appSchema = parseApplicationSchema(await kubectl('get --raw /openapi/v3/apis/core.oam.dev/v1beta1'));
+        const cmNameList = await kubectl('get configmaps -n vela-system -o name');
+        const defs = parseDefinitions(await kubectl('get componentdefinitions.core.oam.dev,traitdefinitions.core.oam.dev,policydefinitions.core.oam.dev -n vela-system -o json'));
         const schemas: SchemasByKind = {
-            components: { schemas: applyIgnoredFields(this.fetchConfigMapSchemasSync(cmNameList, 'component-schema-'), defs.components.ignoredFields), descriptions: defs.components.descriptions },
-            traits: { schemas: applyIgnoredFields(this.fetchConfigMapSchemasSync(cmNameList, 'trait-schema-'), defs.traits.ignoredFields), descriptions: defs.traits.descriptions },
-            policies: { schemas: applyIgnoredFields(this.fetchConfigMapSchemasSync(cmNameList, 'policy-schema-'), defs.policies.ignoredFields), descriptions: defs.policies.descriptions },
+            components: { schemas: applyIgnoredFields(await this.fetchConfigMapSchemas(cmNameList, 'component-schema-'), defs.components.ignoredFields), descriptions: defs.components.descriptions },
+            traits: { schemas: applyIgnoredFields(await this.fetchConfigMapSchemas(cmNameList, 'trait-schema-'), defs.traits.ignoredFields), descriptions: defs.traits.descriptions },
+            policies: { schemas: applyIgnoredFields(await this.fetchConfigMapSchemas(cmNameList, 'policy-schema-'), defs.policies.ignoredFields), descriptions: defs.policies.descriptions },
         };
         const composed = makeDefaultedFieldsOptional(composeSchema(appSchema, schemas)) as JsonObject;
-        composed.title = `KubeVela Application | Cluster: ${getK8sContext()}`;
+        composed.title = context ? `KubeVela Application | Cluster: ${context}` : 'KubeVela Application | No cluster';
         this.schemaContent = JSON.stringify(composed);
-        this.writeCache(this.schemaContent);
+        await this.writeCache(this.schemaContent);
+    }
+
+    private async getK8sContextCached(): Promise<string | null> {
+        if (this.k8sContext !== undefined) {
+            return this.k8sContext;
+        }
+
+        if (this.fetchingContext) {
+            return null;
+        }
+
+        this.fetchingContext = true;
+        try {
+            const context = await getK8sContext();
+            this.k8sContext = context;
+            return context;
+        } finally {
+            this.fetchingContext = false;
+        }
     }
 
     private refreshInBackground(): void {
@@ -465,19 +475,20 @@ export class VelaYamlSchemaProvider {
 
         (async () => {
             try {
-                const appSchema = parseApplicationSchema(await kubectlAsync('get --raw /openapi/v3/apis/core.oam.dev/v1beta1'));
-                const cmNameList = await kubectlAsync('get configmaps -n vela-system -o name');
-                const defs = parseDefinitions(await kubectlAsync('get componentdefinitions.core.oam.dev,traitdefinitions.core.oam.dev,policydefinitions.core.oam.dev -n vela-system -o json'));
+                const context = await this.getK8sContextCached();
+                const appSchema = parseApplicationSchema(await kubectl('get --raw /openapi/v3/apis/core.oam.dev/v1beta1'));
+                const cmNameList = await kubectl('get configmaps -n vela-system -o name');
+                const defs = parseDefinitions(await kubectl('get componentdefinitions.core.oam.dev,traitdefinitions.core.oam.dev,policydefinitions.core.oam.dev -n vela-system -o json'));
                 const schemas: SchemasByKind = {
-                    components: { schemas: applyIgnoredFields(await this.fetchConfigMapSchemasAsync(cmNameList, 'component-schema-'), defs.components.ignoredFields), descriptions: defs.components.descriptions },
-                    traits: { schemas: applyIgnoredFields(await this.fetchConfigMapSchemasAsync(cmNameList, 'trait-schema-'), defs.traits.ignoredFields), descriptions: defs.traits.descriptions },
-                    policies: { schemas: applyIgnoredFields(await this.fetchConfigMapSchemasAsync(cmNameList, 'policy-schema-'), defs.policies.ignoredFields), descriptions: defs.policies.descriptions },
+                    components: { schemas: applyIgnoredFields(await this.fetchConfigMapSchemas(cmNameList, 'component-schema-'), defs.components.ignoredFields), descriptions: defs.components.descriptions },
+                    traits: { schemas: applyIgnoredFields(await this.fetchConfigMapSchemas(cmNameList, 'trait-schema-'), defs.traits.ignoredFields), descriptions: defs.traits.descriptions },
+                    policies: { schemas: applyIgnoredFields(await this.fetchConfigMapSchemas(cmNameList, 'policy-schema-'), defs.policies.ignoredFields), descriptions: defs.policies.descriptions },
                 };
                 const composed = makeDefaultedFieldsOptional(composeSchema(appSchema, schemas)) as JsonObject;
-                composed.title = `KubeVela Application | Cluster: ${getK8sContext()}`;
+                composed.title = context ? `KubeVela Application | Cluster: ${context}` : 'KubeVela Application | No cluster';
                 this.schemaContent = JSON.stringify(composed);
                 this.schemaVersion++;
-                this.writeCache(this.schemaContent);
+                await this.writeCache(this.schemaContent);
             } catch (err) {
                 console.error('Failed to refresh schemas from cluster:', err);
             } finally {
@@ -498,7 +509,13 @@ export class VelaYamlSchemaProvider {
             : fs.readFileSync(uri.fsPath, 'utf-8');
 
         if (isVelaApplication(content)) {
-            return buildSchemaUri(getK8sContext(), this.schemaVersion);
+            // Use cached context or default to null
+            const context = this.k8sContext !== undefined ? this.k8sContext : null;
+            // Trigger fetch in background if not set
+            if (this.k8sContext === undefined && !this.fetchingContext) {
+                this.getK8sContextCached().catch(() => {});
+            }
+            return buildSchemaUri(context, this.schemaVersion);
         }
 
         return undefined;
@@ -510,12 +527,12 @@ export class VelaYamlSchemaProvider {
         }
 
         if (!this.schemaContent) {
-            try {
-                this.fetchSchemaFromClusterSync();
-            } catch (err) {
+            // Trigger async fetch but don't block - return undefined for now
+            // The schema will be available on next request after cache loads
+            this.fetchSchemaFromCluster().catch((err) => {
                 console.error('Failed to fetch schemas from cluster:', err);
-                return undefined;
-            }
+            });
+            return undefined;
         } else {
             this.refreshInBackground();
         }
