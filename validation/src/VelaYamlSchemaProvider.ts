@@ -369,8 +369,6 @@ export class VelaYamlSchemaProvider {
     private schemaVersion = 0;
     private refreshing = false;
     private cachePath: string;
-    private k8sContext: string | null | undefined;
-    private fetchingContext = false;
 
     constructor(private storagePath: string) {
         this.cachePath = path.join(storagePath, CACHE_FILENAME);
@@ -433,7 +431,7 @@ export class VelaYamlSchemaProvider {
     }
 
     private async fetchSchemaFromCluster(): Promise<void> {
-        const context = await this.getK8sContextCached();
+        const context = await getK8sContext();
         const appSchema = parseApplicationSchema(await kubectl('get --raw /openapi/v3/apis/core.oam.dev/v1beta1'));
         const cmNameList = await kubectl('get configmaps -n vela-system -o name');
         const defs = parseDefinitions(await kubectl('get componentdefinitions.core.oam.dev,traitdefinitions.core.oam.dev,policydefinitions.core.oam.dev -n vela-system -o json'));
@@ -448,25 +446,6 @@ export class VelaYamlSchemaProvider {
         await this.writeCache(this.schemaContent);
     }
 
-    private async getK8sContextCached(): Promise<string | null> {
-        if (this.k8sContext !== undefined) {
-            return this.k8sContext;
-        }
-
-        if (this.fetchingContext) {
-            return null;
-        }
-
-        this.fetchingContext = true;
-        try {
-            const context = await getK8sContext();
-            this.k8sContext = context;
-            return context;
-        } finally {
-            this.fetchingContext = false;
-        }
-    }
-
     private refreshInBackground(): void {
         if (this.refreshing) {
             return;
@@ -475,7 +454,7 @@ export class VelaYamlSchemaProvider {
 
         (async () => {
             try {
-                const context = await this.getK8sContextCached();
+                const context = await getK8sContext();
                 const appSchema = parseApplicationSchema(await kubectl('get --raw /openapi/v3/apis/core.oam.dev/v1beta1'));
                 const cmNameList = await kubectl('get configmaps -n vela-system -o name');
                 const defs = parseDefinitions(await kubectl('get componentdefinitions.core.oam.dev,traitdefinitions.core.oam.dev,policydefinitions.core.oam.dev -n vela-system -o json'));
@@ -509,13 +488,16 @@ export class VelaYamlSchemaProvider {
             : fs.readFileSync(uri.fsPath, 'utf-8');
 
         if (isVelaApplication(content)) {
-            // Use cached context or default to null
-            const context = this.k8sContext !== undefined ? this.k8sContext : null;
-            // Trigger fetch in background if not set
-            if (this.k8sContext === undefined && !this.fetchingContext) {
-                this.getK8sContextCached().catch(() => {});
-            }
-            return buildSchemaUri(context, this.schemaVersion);
+            // Fetch context async in background, but return schema URI immediately with null context
+            // The schema title will be updated on next refresh
+            getK8sContext().then(context => {
+                // Trigger schema version update if context is available
+                if (context) {
+                    this.schemaVersion++;
+                }
+            }).catch(() => {});
+
+            return buildSchemaUri(null, this.schemaVersion);
         }
 
         return undefined;
