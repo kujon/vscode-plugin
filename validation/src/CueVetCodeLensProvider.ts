@@ -24,7 +24,7 @@ export class CueVetCodeLensProvider implements vscode.CodeLensProvider {
 
         const topOfDocument = new vscode.Range(0, 0, 0, 0);
         const codeLens = new vscode.CodeLens(topOfDocument, {
-            title: `$(folder) View processed ${getCueFileType(document)} files`,
+            title: `Vela ${getCueFileType(document)}`,
             command: 'revealFileInOS',
             arguments: [vscode.Uri.file(tempDirPath)]
         });

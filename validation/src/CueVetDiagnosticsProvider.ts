@@ -79,24 +79,33 @@ export class CueVetDiagnosticsProvider implements DiagnosticProvider {
         }
     }
 
-    private getAdditionalContent(document: vscode.TextDocument): string {
+    private getWithAdditionalContent(document: vscode.TextDocument): string {
         const fileType = getCueFileType(document);
+        const text = document.getText();
 
         switch (fileType) {
             case 'definition':
                 return `
-#Context: close({
-    appRevision:    string
-    appRevisionNum: int
-    appName:        string
-    name:           string
-    namespace:      string
-    output:         _
-    outputs:        _
-})
-context: #Context`;
+                    ${text}
+                    #Context: close({
+                        appRevision:    string
+                        appRevisionNum: int
+                        appName:        string
+                        name:           string
+                        namespace:      string
+                        output:         _
+                        outputs:        _
+                    })
+                    context: #Context
+                `;
+            case 'parameter':
+                const textWithRenamedParameter = text.replace('parameter:', '#Parameter:');
+                return `
+                    ${textWithRenamedParameter}
+                    parameter: close(#Parameter)
+                `;
             default:
-                return '';
+                return text;
         }
     }
 
@@ -160,8 +169,7 @@ context: #Context`;
         // Write the current document with any additional content needed
         // Preserve the relative path from addon directory
         const relativeFilePath = relative(addonDir, document.fileName);
-        const additionalContent = this.getAdditionalContent(document);
-        const fileContent = document.getText().concat('\n').concat(additionalContent);
+        const fileContent = this.getWithAdditionalContent(document);
         const tempFilePath = join(tempDir, relativeFilePath);
 
         // Ensure parent directory exists
