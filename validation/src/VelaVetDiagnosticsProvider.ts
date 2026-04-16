@@ -23,8 +23,12 @@ export class VelaVetDiagnosticsProvider implements DiagnosticProvider {
         return 'vela def vet';
     }
 
-    isApplicable(document: vscode.TextDocument): boolean {
-        return getCueFileType(document) === 'definition';
+    async isApplicable(document: vscode.TextDocument): Promise<boolean> {
+        const cueFileType = await getCueFileType(document);
+        return cueFileType === 'component-definition' ||
+            cueFileType === 'trait-definition' ||
+            cueFileType === 'policy-definition' ||
+            cueFileType === 'workflow-step-definition';
     }
 
     getCollection(): vscode.DiagnosticCollection {
@@ -82,7 +86,7 @@ export class VelaVetDiagnosticsProvider implements DiagnosticProvider {
         );
     }
 
-    findCoreProblems(document: vscode.TextDocument, problem: string): CoreProblem[] {
+    async findCoreProblems(document: vscode.TextDocument, problem: string): Promise<CoreProblem[]> {
         // invalid definition spec: json: unknown field "podDisruptive"
         // into
         // invalid definition spec: json: unknown field "podDisruptive"

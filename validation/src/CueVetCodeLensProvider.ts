@@ -12,8 +12,8 @@ export class CueVetCodeLensProvider implements vscode.CodeLensProvider {
         this._onDidChangeCodeLenses.fire();
     }
 
-    provideCodeLenses(document: vscode.TextDocument): vscode.CodeLens[] | Thenable<vscode.CodeLens[]> {
-        if (!this.diagnosticsProvider.isApplicable(document)) {
+    async provideCodeLenses(document: vscode.TextDocument): Promise<vscode.CodeLens[]> {
+        if (!await this.diagnosticsProvider.isApplicable(document)) {
             return [];
         }
 
@@ -24,7 +24,7 @@ export class CueVetCodeLensProvider implements vscode.CodeLensProvider {
 
         const topOfDocument = new vscode.Range(0, 0, 0, 0);
         const codeLens = new vscode.CodeLens(topOfDocument, {
-            title: `Vela ${getCueFileType(document)}`,
+            title: `Vela ${await getCueFileType(document)}`,
             command: 'revealFileInOS',
             arguments: [vscode.Uri.file(tempDirPath)]
         });

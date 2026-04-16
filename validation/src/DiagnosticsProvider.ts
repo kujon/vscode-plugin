@@ -9,13 +9,13 @@ export type CoreProblem = {
 export interface DiagnosticProvider {
     getName(): string
 
-    isApplicable(document: vscode.TextDocument): boolean
+    isApplicable(document: vscode.TextDocument): Promise<boolean>
 
     getCollection(): vscode.DiagnosticCollection
 
     runCommand(document: vscode.TextDocument): Promise<string>
 
-    findCoreProblems(document: vscode.TextDocument, problem: string): CoreProblem[]
+    findCoreProblems(document: vscode.TextDocument, problem: string): Promise<CoreProblem[]>
 
     activate(): void
 

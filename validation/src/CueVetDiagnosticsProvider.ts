@@ -33,7 +33,7 @@ export class CueVetDiagnosticsProvider implements DiagnosticProvider {
         return 'cue vet';
     }
 
-    isApplicable(document: vscode.TextDocument): boolean {
+    async isApplicable(document: vscode.TextDocument): Promise<boolean> {
         return document.languageId === 'cue';
     }
 
@@ -64,15 +64,20 @@ export class CueVetDiagnosticsProvider implements DiagnosticProvider {
         return this.tempDirMap.get(document.uri.toString());
     }
 
-    private getAddonDirectory(document: vscode.TextDocument): string {
+    private async getAddonDirectory(document: vscode.TextDocument): Promise<string> {
         const currentDir = dirname(document.fileName);
-        const fileType = getCueFileType(document);
+        const fileType = await getCueFileType(document);
 
         if (fileType === 'resource') {
             // For nested resources, find the resources dir then go up one level
             const resourcesDir = findResourcesDir(document.fileName);
             return resourcesDir ? dirname(resourcesDir) : dirname(currentDir);
-        } else if (fileType === 'definition') {
+        } else if (
+            fileType === 'component-definition' ||
+            fileType === 'trait-definition' ||
+            fileType === 'policy-definition' ||
+            fileType === 'workflow-step-definition'
+        ) {
             return dirname(currentDir);
         } else {
             return currentDir;
@@ -86,25 +91,80 @@ export class CueVetDiagnosticsProvider implements DiagnosticProvider {
      * @returns Transformed content with additional context
      */
     private transformCueContent(content: string, fileType: CueFileType): string {
+        const definitionContextClusterVersion = `
+            #ClusterVersion: close({
+                major:      string
+                gitVersion: string
+                platform:   string
+                minor:      int
+            })
+        `;
+        const baseDefinitionContextFields = `
+            appName:        string
+            namespace:      string
+            cluster:        string
+            appRevision:    string
+            appRevisionNum: int
+            name:           string
+            revision:       string
+            output:         _
+            outputs:        _
+            workflowName:   string
+            publishVersion: string
+            appLabels:      _
+            appAnnotations: _
+            clusterVersion: #ClusterVersion
+        `;
+        // IMPORTANT: do not prepend anything here, including line breaks to preserve correct error locations.
         switch (fileType) {
-            case 'definition':
-                return `
-                    ${content}
+            case 'component-definition':
+                // https://kubevela.io/docs/platform-engineers/components/custom-component/#full-available-context-in-component
+                return `${content}
+                    ${definitionContextClusterVersion}
                     #Context: close({
-                        appRevision:    string
-                        appRevisionNum: int
-                        appName:        string
+                        ${baseDefinitionContextFields}
+                        replicaKey: string
+                    })
+                    context: #Context
+                `;
+            case 'trait-definition':
+                // https://kubevela.io/docs/platform-engineers/traits/customize-trait/#full-available-context-in-trait
+                return `${content}
+                    ${definitionContextClusterVersion}
+                    #Context: close({
+                        ${baseDefinitionContextFields}
+                        components: _
+                    })
+                    context: #Context
+                `;
+            case 'policy-definition':
+                // https://kubevela.io/docs/platform-engineers/policy/custom-policy/
+                return `${content}
+                    ${definitionContextClusterVersion}
+                    #Context: close({
+                        ${baseDefinitionContextFields}
+                    })
+                    context: #Context
+                `;
+            case 'workflow-step-definition':
+                // https://kubevela.io/docs/platform-engineers/workflow/workflow/#full-available-context-in-workflow-step
+                return `${content}
+                    #Context: close({
                         name:           string
+                        appName:        string
                         namespace:      string
-                        output:         _
-                        outputs:        _
+                        appRevision:    string
+                        stepName:       string
+                        stepSessionID:  string
+                        spanID:         string
+                        workflowName:   string
+                        publishVersion: string
                     })
                     context: #Context
                 `;
             case 'parameter':
                 const textWithRenamedParameter = content.replace('parameter:', '#Parameter:');
-                return `
-                    ${textWithRenamedParameter}
+                return `${textWithRenamedParameter}
                     parameter: close(#Parameter)
                 `;
             default:
@@ -112,8 +172,8 @@ export class CueVetDiagnosticsProvider implements DiagnosticProvider {
         }
     }
 
-    private getWithAdditionalContent(document: vscode.TextDocument): string {
-        const fileType = getCueFileType(document);
+    private async getWithAdditionalContent(document: vscode.TextDocument): Promise<string> {
+        const fileType = await getCueFileType(document);
         const content = document.getText();
         return this.transformCueContent(content, fileType);
     }
@@ -154,14 +214,20 @@ export class CueVetDiagnosticsProvider implements DiagnosticProvider {
 
             // Read, transform, and write the file
             const content = await fs.readFile(sourcePath, 'utf-8');
-            const fileType = getCueFileTypeFromPath(sourcePath, content);
+            const fileType = await getCueFileTypeFromPath(sourcePath, content);
             const transformedContent = this.transformCueContent(content, fileType);
             await fs.writeFile(destPath, transformedContent);
         }
     }
 
+    private shouldVetWholeDirectory(fileType: CueFileType): boolean {
+        // Parameter, resource, and template types need to be validated together in their directory context
+        return fileType === 'parameter' || fileType === 'resource' || fileType === 'template';
+    }
+
     async runCommand(document: vscode.TextDocument): Promise<string> {
-        const addonDir = this.getAddonDirectory(document);
+        const fileType = await getCueFileType(document);
+        const addonDir = await this.getAddonDirectory(document);
 
         // Create a stable temp directory for this document (based on hash of file path)
         const docHash = createHash('md5').update(document.fileName).digest('hex').substring(0, 8);
@@ -176,35 +242,60 @@ export class CueVetDiagnosticsProvider implements DiagnosticProvider {
         // Store the temp directory path for this document
         this.tempDirMap.set(document.uri.toString(), tempDir);
 
-        // Copy all CUE files from addon directory to temp
-        await this.copyDirectoryFilesToTemp(addonDir, tempDir, document.fileName);
-
-        // Write the current document with any additional content needed
-        // Preserve the relative path from addon directory
         const relativeFilePath = relative(addonDir, document.fileName);
-        const fileContent = this.getWithAdditionalContent(document);
+        const fileContent = await this.getWithAdditionalContent(document);
         const tempFilePath = join(tempDir, relativeFilePath);
 
-        // Ensure parent directory exists
-        await fs.mkdir(dirname(tempFilePath), { recursive: true });
-        await fs.writeFile(tempFilePath, fileContent);
+        if (this.shouldVetWholeDirectory(fileType)) {
+            // Copy all CUE files from addon directory to temp
+            await this.copyDirectoryFilesToTemp(addonDir, tempDir, document.fileName);
 
-        // Vet all CUE files in the temp directory
-        // https://github.com/cue-lang/cue/discussions/2747#discussioncomment-7972009
-        const command = `cd "${tempDir}" && ${getToolPath('cue')} vet $(find . -not -path "./cue.mod/**/*" -name "*.cue") -c=false`;
-        console.debug('Running command', command);
+            // Write the current document with any additional content needed
+            // Preserve the relative path from addon directory
+            // Ensure parent directory exists
+            await fs.mkdir(dirname(tempFilePath), { recursive: true });
+            await fs.writeFile(tempFilePath, fileContent);
 
-        const { stdout, stderr } = await runCommand(command);
+            // Vet all CUE files in the temp directory
+            // https://github.com/cue-lang/cue/discussions/2747#discussioncomment-7972009
+            const command = `cd "${tempDir}" && ${getToolPath('cue')} vet $(find . -not -path "./cue.mod/**/*" -name "*.cue") -c=false`;
+            console.debug('Running command', command);
 
-        if (stderr) {
-            if (this.shouldTemporarilyIgnore(stderr)) {
-                return stderr;
-            } else {
-                throw stderr;
+            const { stdout, stderr } = await runCommand(command);
+
+            if (stderr) {
+                if (this.shouldTemporarilyIgnore(stderr)) {
+                    return stderr;
+                } else {
+                    throw stderr;
+                }
             }
-        }
 
-        return stdout;
+            return stdout;
+        } else {
+            // For definitions and other types, vet only the current file
+            // Ensure parent directory exists
+            await fs.mkdir(dirname(tempFilePath), { recursive: true });
+
+            // Write the transformed file to temp
+            await fs.writeFile(tempFilePath, fileContent);
+
+            // Vet only this file
+            const command = `cd "${tempDir}" && ${getToolPath('cue')} vet "${relativeFilePath}" -c=false`;
+            console.debug('Running command', command);
+
+            const { stdout, stderr } = await runCommand(command);
+
+            if (stderr) {
+                if (this.shouldTemporarilyIgnore(stderr)) {
+                    return stderr;
+                } else {
+                    throw stderr;
+                }
+            }
+
+            return stdout;
+        }
     }
 
     private findRange(document: vscode.TextDocument, addonDir: string, locationLine: string): vscode.Range | null {
@@ -234,7 +325,7 @@ export class CueVetDiagnosticsProvider implements DiagnosticProvider {
         );
     }
 
-    findCoreProblems(document: vscode.TextDocument, problem: string): CoreProblem[] {
+    async findCoreProblems(document: vscode.TextDocument, problem: string): Promise<CoreProblem[]> {
         // Sample error:
         //
         // output.spec.components: reference "sagemakerdomain" not found:
@@ -245,7 +336,7 @@ export class CueVetDiagnosticsProvider implements DiagnosticProvider {
         //     ./provider.cue:18:13
         //     ./provider.cue:18:67
 
-        const addonDir = this.getAddonDirectory(document);
+        const addonDir = await this.getAddonDirectory(document);
         const lines = problem.replace(/\n$/, '').split('\n');
         const problems: CoreProblem[] = [];
 

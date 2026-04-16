@@ -13,7 +13,7 @@ const documentUpdateTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const DEBOUNCE_DELAY = 500; // milliseconds
 
 async function updateDiagnostics(document: vscode.TextDocument, diagnosticProvider: DiagnosticProvider, codeLensProvider?: CueVetCodeLensProvider): Promise<void> {
-  if (diagnosticProvider.isApplicable(document)) {
+  if (await diagnosticProvider.isApplicable(document)) {
     try {
       await diagnosticProvider.runCommand(document);
       diagnosticProvider.getCollection().clear();
@@ -25,7 +25,7 @@ async function updateDiagnostics(document: vscode.TextDocument, diagnosticProvid
     } catch (problem) {
       console.debug(problem);
 
-      const problems = diagnosticProvider.findCoreProblems(document, problem as string);
+      const problems = await diagnosticProvider.findCoreProblems(document, problem as string);
 
       diagnosticProvider.getCollection().set(
         document.uri,

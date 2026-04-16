@@ -1,36 +1,66 @@
 import * as vscode from 'vscode';
 import { basename, dirname } from "node:path";
 import { isTempFile } from './files';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+
+const execAsync = promisify(exec);
 
 export type CueFileType =
-    'definition' |
+    'component-definition' |
+    'trait-definition' |
+    'policy-definition' |
+    'workflow-step-definition' |
     'parameter' |
     'template' |
     'resource' |
     'generated' |
-    'unknown';
+    'unknown' |
+    null;
 
-export function getCueFileType(document: vscode.TextDocument): CueFileType {
+export async function getCueFileType(document: vscode.TextDocument): Promise<CueFileType> {
     return getCueFileTypeFromPath(document.fileName, document.getText());
 }
 
-export function getCueFileTypeFromPath(filePath: string, content?: string): CueFileType {
+export async function getCueFileTypeFromPath(filePath: string, content?: string): Promise<CueFileType> {
     const dir = dirname(filePath);
     const baseName = basename(filePath);
 
+    if (!filePath.endsWith('.cue')) {
+        return null;
+    }
+
+    if (isTempFile(filePath)) {
+        return 'generated';
+    }
+
+    const isDefinition = dir.endsWith('definitions') || (content && content.includes('template:'));
+
+    // Extract definition type from CUE file if it's a definition
+    let definitionType: string | null = null;
+    if (isDefinition) {
+        // TODO: Improve detecting definition type.
+        const { stdout } = await execAsync(`sed -e '1,/^)$/d' -e '/^template:/,$d' ${filePath} | cue eval - --out json | awk -F'"' '/"type":/ {print $4}'`);
+        definitionType = stdout.trim();
+    }
+
     switch (true) {
-        case !filePath.endsWith('.cue'):
-            return 'unknown';
-        case isTempFile(filePath):
-            return 'generated';
         case baseName === 'parameter.cue':
             return 'parameter';
         case baseName === 'template.cue':
             return 'template';
         case dir.includes('/resources') || dir.endsWith('resources'):
             return 'resource';
-        case dir.endsWith('definitions') || (content && content.includes('template:')):
-            return 'definition';
+        case definitionType === 'component':
+            return 'component-definition';
+        case definitionType === 'trait':
+            return 'trait-definition';
+        case definitionType === 'policy':
+            return 'policy-definition';
+        case definitionType === 'workflow-step':
+            return 'workflow-step-definition';
+        case isDefinition:
+            return 'component-definition'; // fallback if type extraction fails
         default:
             return 'unknown';
     }
