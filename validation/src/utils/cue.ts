@@ -11,13 +11,17 @@ export type CueFileType =
     'unknown';
 
 export function getCueFileType(document: vscode.TextDocument): CueFileType {
-    const dir = dirname(document.fileName);
-    const baseName = basename(document.fileName);
+    return getCueFileTypeFromPath(document.fileName, document.getText());
+}
+
+export function getCueFileTypeFromPath(filePath: string, content?: string): CueFileType {
+    const dir = dirname(filePath);
+    const baseName = basename(filePath);
 
     switch (true) {
-        case document.languageId !== 'cue':
+        case !filePath.endsWith('.cue'):
             return 'unknown';
-        case isTempFile(document.fileName):
+        case isTempFile(filePath):
             return 'generated';
         case baseName === 'parameter.cue':
             return 'parameter';
@@ -25,7 +29,7 @@ export function getCueFileType(document: vscode.TextDocument): CueFileType {
             return 'template';
         case dir.includes('/resources') || dir.endsWith('resources'):
             return 'resource';
-        case dir.endsWith('definitions') || document.getText().includes('template:'):
+        case dir.endsWith('definitions') || (content && content.includes('template:')):
             return 'definition';
         default:
             return 'unknown';

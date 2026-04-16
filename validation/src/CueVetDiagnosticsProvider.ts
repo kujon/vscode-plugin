@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { CoreProblem, DiagnosticProvider } from './DiagnosticsProvider';
 import { getToolPath } from './ToolManager';
 import { dirname, join, relative } from 'path';
-import { getCueFileType, findResourcesDir } from './utils/cue';
+import { getCueFileType, getCueFileTypeFromPath, findResourcesDir, CueFileType } from './utils/cue';
 import { runCommand } from './utils/command';
 import { mkdtempSync, existsSync, rmSync, promises as fs } from 'fs';
 import { tmpdir } from 'os';
@@ -79,14 +79,17 @@ export class CueVetDiagnosticsProvider implements DiagnosticProvider {
         }
     }
 
-    private getWithAdditionalContent(document: vscode.TextDocument): string {
-        const fileType = getCueFileType(document);
-        const text = document.getText();
-
+    /**
+     * Transforms CUE file content by adding necessary context based on file type.
+     * @param content - Original file content
+     * @param fileType - Type of CUE file
+     * @returns Transformed content with additional context
+     */
+    private transformCueContent(content: string, fileType: CueFileType): string {
         switch (fileType) {
             case 'definition':
                 return `
-                    ${text}
+                    ${content}
                     #Context: close({
                         appRevision:    string
                         appRevisionNum: int
@@ -99,14 +102,20 @@ export class CueVetDiagnosticsProvider implements DiagnosticProvider {
                     context: #Context
                 `;
             case 'parameter':
-                const textWithRenamedParameter = text.replace('parameter:', '#Parameter:');
+                const textWithRenamedParameter = content.replace('parameter:', '#Parameter:');
                 return `
                     ${textWithRenamedParameter}
                     parameter: close(#Parameter)
                 `;
             default:
-                return text;
+                return content;
         }
+    }
+
+    private getWithAdditionalContent(document: vscode.TextDocument): string {
+        const fileType = getCueFileType(document);
+        const content = document.getText();
+        return this.transformCueContent(content, fileType);
     }
 
     private async copyDirectoryFilesToTemp(addonDir: string, tempDir: string, currentFileName: string, relativePath: string = ''): Promise<void> {
@@ -138,12 +147,16 @@ export class CueVetDiagnosticsProvider implements DiagnosticProvider {
 
             const destPath = join(tempDir, relativeFilePath);
 
-            // Don't copy the current file yet - we'll write it with additional content
+            // Don't copy the current file yet - we'll write it with additional content separately
             if (sourcePath === currentFileName) {
                 continue;
             }
 
-            await fs.copyFile(sourcePath, destPath);
+            // Read, transform, and write the file
+            const content = await fs.readFile(sourcePath, 'utf-8');
+            const fileType = getCueFileTypeFromPath(sourcePath, content);
+            const transformedContent = this.transformCueContent(content, fileType);
+            await fs.writeFile(destPath, transformedContent);
         }
     }
 
