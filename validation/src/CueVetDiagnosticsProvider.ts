@@ -133,7 +133,8 @@ export class CueVetDiagnosticsProvider implements DiagnosticProvider {
                     ${definitionContextClusterVersion}
                     #Context: close({
                         ${baseDefinitionContextFields}
-                        components: _
+                        components:    _
+                        componentType: string
                     })
                     context: #Context
                 `;
