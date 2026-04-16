@@ -168,6 +168,35 @@ export class CueVetDiagnosticsProvider implements DiagnosticProvider {
                 return `${textWithRenamedParameter}
                     parameter: close(#Parameter)
                 `;
+            case 'resource':
+            case 'template':
+                // https://kubevela.io/docs/platform-engineers/addon/intro/#basic-information-file
+                return `${content}
+                    #Dependencies: close({
+                        name:    string
+                        version: string
+                    })
+
+                    #Context: close({
+                        metadata: close({
+                            name:         string
+                            version:      string
+                            description:  string
+                            icon:         string
+                            url:          string
+                            tags:         [...string]
+                            dependencies: [...#Dependencies]
+                            system:       close({
+                                vela:       string
+                                kubernetes: string
+                            })
+                            deployTo:     close({
+                                runtimeCluster: bool
+                            })
+                        })
+                    })
+                    context: #Context
+                `;
             default:
                 return content;
         }
